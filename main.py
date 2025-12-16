@@ -29,3 +29,18 @@ async def on_ready():
 async def on_command_error(ctx, error):
     print(f"Command error: {error}")
     await ctx.send(f"Error: {error}")
+
+
+@bot.command()
+async def play(ctx, *, search: str):
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        await ctx.send("You're not in a voice channel!")
+        return
+
+    channel = ctx.author.voice.channel
+    vc = ctx.voice_client
+
+    if vc is None:
+        vc = await channel.connect()
+    elif vc.channel != channel:
+        await vc.move_to(channel)
