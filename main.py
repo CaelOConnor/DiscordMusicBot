@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import logging
 from dotenv import load_dotenv
 import os
@@ -44,18 +45,24 @@ async def on_command_error(ctx, error):
     print(f"Command error: {error}")
     await ctx.send(f"Error: {error}")
 
-@bot.command()
-async def play(ctx, *, search: str):
-    if not ctx.author.voice or not ctx.author.voice.channel:
-        await ctx.send("You're not in a voice channel!")
+
+
+@bot.tree.command(name="play", description="Play a song or add it to the queue.")
+@app_commands.describe(song_query="Search query")
+async def play(interaction: discord.Interaction, song_query: str):
+    await interaction.response.defer()
+
+    channel = interaction.user.voice.channel
+    vc = interaction.guild.voice_client
+
+    if channel is None:
+        await interaction.followup.send("No one in voice channel")
         return
 
-    channel = ctx.author.voice.channel
-    vc = ctx.voice_client
 
     if vc is None:
         vc = await channel.connect()
-    elif vc.channel != channel:
+    elif vc.channel != vc.channel:
         await vc.move_to(channel)
 
     query = f"ytsearch:{search}" if "http" not in search else search
@@ -94,15 +101,6 @@ async def play(ctx, *, search: str):
     except Exception as e:
         await ctx.send(f"Error playing audio: {e}")
 
-
-@bot.command()
-async def skip(ctx):
-    vc = ctx.voice_client
-    if vc and (vc.is_playing() or vc.is_paused()):
-        vc.stop()
-        await ctx.send("Skipped current song.")
-    else:
-        await ctx.send("Nothing is playing.")
 
 
 
