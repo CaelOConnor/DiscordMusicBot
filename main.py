@@ -110,12 +110,12 @@ def get_song_from_queue(query: str):
             'title': info['title'],
             'url': info['url']  # direct audio URL
         }
-
+    
 
 async def play_next(vc: discord.VoiceClient, text_channel: discord.TextChannel):
     # play the next song in the queue
     if not queue:
-        await asyncio.sleep(60) # leave voice channel after 60 seconds if there is not queue
+        await asyncio.sleep(60)
         if not queue and not vc.is_playing():
             await text_channel.send("Leaving voice channel due to inactivity")
             await vc.disconnect()
@@ -123,16 +123,15 @@ async def play_next(vc: discord.VoiceClient, text_channel: discord.TextChannel):
 
     song = queue.popleft()
 
-    source = discord.FFmpegOpusAudio(
+    source = discord.FFmpegPCMAudio(
         song["url"],
         executable=FFMPEG_PATH,
         **FFMPEG_OPTIONS
     )
 
-    def after(error): # after a song finishes it calls play next again
+    def after(error):
         if error:
             print(error)
-
         asyncio.run_coroutine_threadsafe(
             play_next(vc, text_channel),
             bot.loop
@@ -140,13 +139,14 @@ async def play_next(vc: discord.VoiceClient, text_channel: discord.TextChannel):
 
     vc.play(source, after=after)
 
-    embed = discord.Embed( # embed that appears in discord sdisplaying son info
+    embed = discord.Embed(
         title="Now Playing:",
         description=f"[{song['title']}]({song['url']})"
     )
 
-    view = View(vc) # buttons
+    view = View(vc)
     await text_channel.send(embed=embed, view=view)
+
     
 
 @bot.tree.command( name="music", description="Play a song or add it to the queue.", guild=discord.Object(id=int(guild_id)) )
