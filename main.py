@@ -13,6 +13,7 @@ token = os.getenv('DISCORD_TOKEN')
 guild_id = os.getenv('GUILD_ID')
 
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -21,6 +22,7 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 queue = deque()
+
 channel_to_embed = None
 
 FFMPEG_PATH = os.path.join(os.getcwd(), "bin", "ffmpeg", "ffmpeg.exe")
@@ -28,27 +30,38 @@ FFMPEG_PATH = os.path.join(os.getcwd(), "bin", "ffmpeg", "ffmpeg.exe")
 YDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
-    'youtube_include_dash_manifest': False,
-    'youtube_include_hls_manifest': False,
-}
+    'quiet': True,
+    'extract_flat': False,  
+    'no_warnings': True,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0'  # for IPv6 issues
+} 
 
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn -c:a libopus -b:a 96k',
+    'options': '-vn'
 }
 
 
 @bot.event
 async def on_ready():
+    # shows bot is in discord
+    guild = discord.Object(id=int(guild_id))
+    await bot.tree.sync(guild=guild)
+
     print(f"We are ready to go in, {bot.user.name}!")
-    print("Registered commands:")
-    for command in bot.commands:
-        print(f"- {command}")
+    print("Slash commands synced to guild:", guild_id)
 
 
-class View(discord.ui.View): # for buttons
+class View(discord.ui.View):
+    # for the buttons underneeth the song playing (skip, pause/resume, stop)
+    def __init__(self, vc: discord.VoiceClient):
+        super().__init__(timeout=None)
+        self.vc = vc
+        self.paused = False
 
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.green)
+    # stops the song that is playing so that next one can play
     async def skip(self, button, interaction):
         if self.vc.is_playing():
             self.vc.stop()
@@ -56,46 +69,56 @@ class View(discord.ui.View): # for buttons
         else:
             await button.response.send_message("No song playing to be skipped")
 
-    @discord.ui.button(label="Pause!", style=discord.ButtonStyle.blurple) #change me
-    async def pause(self, button, interaction):
-        await button.response.send_message("You have clicked the 2nd button")
+    @discord.ui.button(label="Pause!", style=discord.ButtonStyle.blurple)
+    # will pause and change button label or vis versa
+    async def pause_or_resume(self, button, interaction):
+        if self.vc.is_playing():
+            self.vc.pause()
+            button.label = "Resume"
+            await interaction.response.edit_message(view=self)
+        elif self.vc.is_paused():
+            self.vc.resume()
+            button.label = "Pause"
+            await interaction.response.edit_message(view=self)
+        else:
+            await interaction.response.send_message("Nothing to pause.", ephemeral=True)
 
     @discord.ui.button(label="Stop", style=discord.ButtonStyle.red)
+    # stops song and disconnects
     async def stop(self, button, interaction):
         self.vc.stop()
         await self.vc.disconnect()
         await button.response.send_message("Music bot stopped")
 
-        
-
-@client.tree.command(name="button", descrition="Displaying a Button", guild=guild_id)
-async def myButton(interaction: discord.Interaction):
-    await interaction.response.send_message(view = View()) # displays the button from View class
-
-
-
-
-@client.tree.command(name="embed", descrition="Embedding when playing", guild=guild_id) # embedeing for songs playing
-async def printer(interaction: discord.Interaction):
-    embed = discord.Embed(title="TITLE HERE", url ="URL HERE") # change me
-    await interaction.response.send_message(embed=embed)
-
-
-
-
+    
 def get_song_from_queue(query: str):
-    with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+    # gets next song and its info from queue
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'quiet': True,
+        'default_search': 'ytsearch',
+        'source_address': '0.0.0.0'
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(query, download=False)
-        if "entries" in info:
-            info = info["entries"][0]
+        if 'entries' in info:  # search returned multiple results
+            info = info['entries'][0]
+
         return {
-            "title": info["title"],
-            "url": info["url"]
+            'title': info['title'],
+            'url': info['url']  # direct audio URL
         }
 
 
 async def play_next(vc: discord.VoiceClient, text_channel: discord.TextChannel):
+    # play the next song in the queue
     if not queue:
+        await asyncio.sleep(60) # leave voice channel after 60 seconds if there is not queue
+        if not queue and not vc.is_playing():
+            await text_channel.send("Leaving voice channel due to inactivity")
+            await vc.disconnect()
         return
 
     song = queue.popleft()
@@ -106,9 +129,10 @@ async def play_next(vc: discord.VoiceClient, text_channel: discord.TextChannel):
         **FFMPEG_OPTIONS
     )
 
-    def after(error):
+    def after(error): # after a song finishes it calls play next again
         if error:
             print(error)
+
         asyncio.run_coroutine_threadsafe(
             play_next(vc, text_channel),
             bot.loop
@@ -116,17 +140,18 @@ async def play_next(vc: discord.VoiceClient, text_channel: discord.TextChannel):
 
     vc.play(source, after=after)
 
-    embed = discord.Embed(
-        title="Now Playing 🎶",
+    embed = discord.Embed( # embed that appears in discord sdisplaying son info
+        title="Now Playing:",
         description=f"[{song['title']}]({song['url']})"
     )
 
-    view = View(vc)
+    view = View(vc) # buttons
     await text_channel.send(embed=embed, view=view)
     
 
-@bot.tree.command(name="music", description="Play a song or add it to the queue.")
+@bot.tree.command( name="music", description="Play a song or add it to the queue.", guild=discord.Object(id=int(guild_id)) )
 async def play(interaction: discord.Interaction, song_query: str):
+    # /music to play song or add it to queue
     await interaction.response.defer()
 
     if not interaction.user.voice:
@@ -136,7 +161,7 @@ async def play(interaction: discord.Interaction, song_query: str):
     channel = interaction.user.voice.channel
     vc = interaction.guild.voice_client
 
-    if vc is None:
+    if vc is None: # put bot into voice channel
         vc = await channel.connect()
     elif vc.channel != channel:
         await vc.move_to(channel)
@@ -148,77 +173,6 @@ async def play(interaction: discord.Interaction, song_query: str):
         await play_next(vc, interaction.channel)
     else:
         await interaction.followup.send("Added to queue.")
-
-
-
-
-
-
-
-# @bot.event
-# async def on_command_error(ctx, error):
-#     print(f"Command error: {error}")
-#     await ctx.send(f"Error: {error}")
-
-
-
-# @bot.tree.command(name="play", description="Play a song or add it to the queue.")
-# @app_commands.describe(song_query="Search query")
-# async def play(interaction: discord.Interaction, song_query: str):
-#     await interaction.response.defer()
-
-#     channel = interaction.user.voice.channel
-#     vc = interaction.guild.voice_client
-
-#     if channel is None:
-#         await interaction.followup.send("No one in voice channel")
-#         return
-
-
-#     if vc is None:
-#         vc = await channel.connect()
-#     elif vc.channel != vc.channel:
-#         await vc.move_to(channel)
-
-#     query = f"ytsearch:{search}" if "http" not in search else search
-
-#     try:
-#         loop = asyncio.get_event_loop()
-#         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-#             info = await loop.run_in_executor(
-#                 None,
-#                 lambda: ydl.extract_info(query, download=False)
-#             )
-
-#         if 'entries' in info:
-#             info = info['entries'][0]
-
-#         audio_url = info['url']
-#         title = info.get('title', 'Unknown Title')
-
-#     except Exception as e:
-#         await ctx.send(f"Error finding audio: {e}")
-#         return
-
-#     if vc.is_playing():
-#         await ctx.send("Already playing audio. Use `!skip` to skip.")
-#         return
-
-#     try:
-#         source = discord.FFmpegPCMAudio(
-#             audio_url,
-#             executable=FFMPEG_PATH,
-#             **FFMPEG_OPTIONS
-#         )
-#         vc.play(source)
-#         await ctx.send(f"🎶 Now playing: **{title}**")
-
-#     except Exception as e:
-#         await ctx.send(f"Error playing audio: {e}")
-
-
-
-
 
 
 bot.run(token)
