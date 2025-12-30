@@ -12,6 +12,8 @@ load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
 guild_id = os.getenv('GUILD_ID')
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 
 intents = discord.Intents.default()
@@ -108,9 +110,9 @@ def get_song_from_queue(query: str):
 
         return {
             'title': info['title'],
-            'url': info['url']  # direct audio URL
+            #'url': info['url']  # direct audio URL
+            'webpage_url': info['webpage_url']
         }
-    
 
 async def play_next(vc: discord.VoiceClient, text_channel: discord.TextChannel):
     # play the next song in the queue
@@ -123,15 +125,19 @@ async def play_next(vc: discord.VoiceClient, text_channel: discord.TextChannel):
 
     song = queue.popleft()
 
+    with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+        info = ydl.extract_info(song["webpage_url"], download=False)
+        audio_url = info["url"]
+
     source = discord.FFmpegPCMAudio(
-        song["url"],
+        audio_url,
         executable=FFMPEG_PATH,
         **FFMPEG_OPTIONS
     )
 
     def after(error):
         if error:
-            print(error)
+            print("Player error:", error)
         asyncio.run_coroutine_threadsafe(
             play_next(vc, text_channel),
             bot.loop
@@ -141,13 +147,11 @@ async def play_next(vc: discord.VoiceClient, text_channel: discord.TextChannel):
 
     embed = discord.Embed(
         title="Now Playing:",
-        description=f"[{song['title']}]({song['url']})"
+        description=f"[{song['title']}]({song['webpage_url']})"
     )
 
     view = View(vc)
-    await text_channel.send(embed=embed, view=view)
-
-    
+    await text_channel.send(embed=embed, view=view)   
 
 @bot.tree.command( name="music", description="Play a song or add it to the queue.", guild=discord.Object(id=int(guild_id)) )
 async def play(interaction: discord.Interaction, song_query: str):
